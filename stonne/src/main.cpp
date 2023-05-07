@@ -19,10 +19,15 @@ void configDenseGEMMParameters(int argc, char *argv[], Config &stonne_cfg, std::
 
 void configSparseDenseParameters(int argc, char *argv[], Config &stonne_cfg, std::string &layer_name, unsigned int &M, unsigned int &N, unsigned int &K, unsigned int &MK_sparsity, unsigned int &T_N, unsigned int &T_K, TileGenerator::Target &tileGeneratorTarget, TileGenerator::Generator &tileGenerator);
 
+void configPoolParameters(int argc, char *argv[], Config &stonne_cfg, std::string &layer_name, unsigned int &R, unsigned int &S, unsigned int &C, unsigned int &K, unsigned int &G, unsigned int &N, unsigned int &X, unsigned int &Y, unsigned int &strides,
+                      unsigned int &T_R, unsigned int &T_S, unsigned int &T_C, unsigned int &T_K, unsigned int &T_G, unsigned int &T_N, unsigned int &T_X_, unsigned int &T_Y_, TileGenerator::Target &tileGeneratorTarget, TileGenerator::Generator &tileGenerator);
+
 bool runConvCommand(int argc, char *argv[]);
 bool runSparseGEMMCommand(int argc, char *argv[]);
 bool runDenseGEMMCommand(int argc, char *argv[]);
 bool runSparseDenseCommand(int argc, char *argv[]);
+bool runPoolCommand(int argc, char *argv[]);
+
 bool runHelpCommand();
 //float* generateMatrixDense(unsigned int rows, unsigned int cols, unsigned int sparsity);
 
@@ -62,6 +67,10 @@ int main(int argc, char *argv[]) {
 
 	else if(arg=="-SparseDense") {
 	    runSparseDenseCommand(argc, argv);
+
+	}
+    else if(arg=="-Pool") {
+	    runPoolCommand(argc, argv);
 
 	}
 
@@ -608,6 +617,119 @@ bool runSparseGEMMCommand(int argc, char *argv[]) {
 
 
 }
+
+bool runPoolCommand(int argc, char *argv[]) {
+    float EPSILON=0.05;
+    unsigned int MAX_RANDOM=10; //Variable used to generate the random values
+    /** Generating the inputs and outputs **/
+
+    //Layer parameters (See MAERI paper to find out the taxonomy meaning)
+    std::string layer_name="TestLayer";
+    unsigned int R=1;                                  // R
+    unsigned int S=3;                                  // S
+    unsigned int C=1;                                  // C
+    unsigned int K=1;                                  // K
+    unsigned int G=1;                                  // G
+    unsigned int N=1;                                  // N
+    unsigned int X=1;                                  // X //TODO CHECK X=1 and Y=1
+    unsigned int Y=3;                                  // Y
+    unsigned int strides=1;                            // Strides
+ 
+    //Tile parameters (See MAERI paper to find out the taxonomy meaning)
+    unsigned int T_R=1;                                // T_R
+    unsigned int T_S=3;                                // T_S
+    unsigned int T_C=1;                                // T_C
+    unsigned int T_K=1;                                // T_K
+    unsigned int T_G=1;                                // T_G
+    unsigned int T_N=1;                                // T_N
+    unsigned int T_X_=1;                               // T_X
+    unsigned int T_Y_=1;                               // T_Y
+
+    // TileGenerator parameters
+    TileGenerator::Target tileGeneratorTarget = TileGenerator::Target::NONE;
+    TileGenerator::Generator tileGenerator = TileGenerator::Generator::CHOOSE_AUTOMATICALLY;
+
+    Config stonne_cfg; //Hardware parameters
+//    stonne_cfg.m_MSNetworkCfg.ms_size=128;
+    configPoolParameters(argc, argv, stonne_cfg, layer_name, R, S, C, K, G, N, X, Y, strides, T_R, T_S, T_C, T_K, T_G, T_N, T_X_, T_Y_, tileGeneratorTarget, tileGenerator); //Modify stonne_cfg and the variables according to user arguments
+
+    //Calculating output parameters
+    unsigned int X_= (X - R + strides) / strides;      // X_
+    unsigned int Y_=(Y - S + strides) / strides;       // Y_
+    std::cout << "Output Size: (X'=" << X_ << ", Y'=" << Y_ << ")" << std::endl; 
+
+
+    //Creating arrays to store the ifmap ofmap and weights
+    unsigned int ifmap_size=N*X*Y*C;
+    unsigned int filter_size=R*S*(C/G)*K;
+    unsigned int ofmap_size=N*X_*Y_*K;
+    float* ifmap = new float[ifmap_size];
+    float* filter = new float[filter_size];
+    float* ofmap = new float[ofmap_size];
+    float* ofmap_cpu = new float[ofmap_size]; //Used to store the CPU computed values to compare with the simulator version
+
+    //Filling the arrays with random values
+    for(int i=0; i<ifmap_size; i++) {
+        ifmap[i]=rand()%MAX_RANDOM;
+    }
+
+    for(int i=0;i<filter_size; i++) {
+        filter[i]=rand()%MAX_RANDOM;
+    }
+
+    //computing CPU version
+    sequential_layer(R, S, C, K, G, N, X, Y, strides, ifmap, filter, ofmap_cpu); 
+
+    /** END of generating the inputs and outputs **/
+    //
+    //
+    //
+    /** Configuring and running the accelerator  **/
+    
+    //Computing the CNN Layer with the simulator
+    Stonne* stonne_instance = new Stonne(stonne_cfg); //Creating instance of the simulator
+    stonne_instance->loadDNNLayer(CONV, layer_name, R, S, C, K, G, N, X, Y, strides, ifmap, filter, ofmap, CNN_DATAFLOW); //Loading the layer
+    //Loads or generates a tile configuration depending on whether a TileGenerator target has been specified
+    if (tileGeneratorTarget == TileGenerator::Target::NONE)
+        stonne_instance->loadTile(T_R, T_S, T_C, T_K, T_G, T_N, T_X_, T_Y_);
+    else
+        stonne_instance->generateTile(tileGenerator, tileGeneratorTarget);
+    stonne_instance->run(); //Running the simulator 
+
+    /** END of configuring and running the accelerator  **/
+    //
+    //
+    //
+    /** CHECKING the results to make sure that the output is correct  **/
+
+    //Comparing the results
+    for(int i=0;i<ofmap_size; i++) {
+        float difference=fabs(ofmap[i]-ofmap_cpu[i]);
+        if(difference > EPSILON) {
+            std::cout << "ERROR position " << i <<  ": Value ofmap simulator: " << ofmap[i] << ". Value ofmap CPU: " << ofmap_cpu[i] << std::endl;
+            std::cout << "\033[1;31mT test not passed\033[0m" << std::endl;
+            delete[] ifmap;
+            delete[] filter;
+            delete[] ofmap;
+            delete[] ofmap_cpu;
+            delete stonne_instance;
+            assert(false); //Always false
+            
+        }
+    }
+
+
+    //If the code does not stop then the TEST is correct
+    std::cout << "\033[1;32mTest passed correctly \033[0m" << std::endl << std::endl;
+
+    delete[] ifmap;
+    delete[] filter;
+    delete[] ofmap;
+    delete[] ofmap_cpu;
+    delete stonne_instance; 
+    return true;
+}
+
 
 bool runHelpCommand() {
     std::cout << "Welcome to the STONNE User Interface Version 1.0: " << std::endl;
@@ -1363,4 +1485,194 @@ void configSparseDenseParameters(int argc, char *argv[], Config &stonne_cfg, std
     }
 }
 
+void configPoolParameters(int argc, char *argv[], Config &stonne_cfg, std::string &layer_name, unsigned int &R, unsigned int &S, unsigned int &C, unsigned int &K, unsigned int &G, unsigned int &N, unsigned int &X, unsigned int &Y, unsigned int &strides,
+                      unsigned int &T_R, unsigned int &T_S, unsigned int &T_C, unsigned int &T_K, unsigned int &T_G, unsigned int &T_N, unsigned int &T_X_, unsigned int &T_Y_, TileGenerator::Target &tileGeneratorTarget, TileGenerator::Generator &tileGenerator) {
+
+    //Parsing
+    for(int i=2; i<argc; i++) { //0 is the name of the program and 1 is the execution command type
+        string arg = argv[i];
+        //Spliting using = character
+        string::size_type pos = arg.find('=');
+        if(arg.npos != pos) {
+            string value_str=arg.substr(pos+1);
+            string name=arg.substr(0, pos);
+            unsigned int value;
+            if((name != "-layer_name") && (name != "-rn_type") && (name != "-generate_tile") && (name != "-generator")) { //string parameters
+                value=stoi(value_str);
+            }
+            //Checking parameter name
+            if(name=="-num_ms") {
+                if(!ispowerof2(value)) {   //Checking that the num_ms is power of 2
+                    std::cout << "Error: -num_ms must be power of 2" << std::endl;
+                    exit(1);
+                }
+                std::cout << "Changing num_ms to " << value << std::endl; //To debug
+                stonne_cfg.m_MSNetworkCfg.ms_size=value;
+            }
+
+            else if(name=="-dn_bw") {
+                if(!ispowerof2(value)) {
+                    std::cout << "Error: -dn_bw must be power of 2" << std::endl;
+                    exit(1);
+                }
+                std::cout << "Changing dn_bw to " << value << std::endl; //To debug
+                stonne_cfg.m_SDMemoryCfg.n_read_ports=value;
+            }
+
+            else if(name=="-rn_bw") {
+                if(!ispowerof2(value)) {
+                    std::cout << "Error: -rn_bw must be power of 2" << std::endl; 
+                    exit(1);
+                }
+                std::cout << "Changing rn_bw to " << value << std::endl;
+                stonne_cfg.m_SDMemoryCfg.n_write_ports=value;
+            }
+
+	    else if(name=="-accumulation_buffer") {
+                std::cout << "Changing accumulation_buffer to " << value << std::endl;
+                stonne_cfg.m_ASNetworkCfg.accumulation_buffer_enabled=value;
+            }
+
+
+
+
+            else if(name=="-print_stats") {
+                if((value != 0) && (value != 1)) {
+                    std::cout << "Error: -print_stats only supports 0 or 1" << std::endl;
+                    exit(1);
+                }
+                std::cout << "Changing print_stats to " << value << std::endl;
+                stonne_cfg.print_stats_enabled=value; 
+            }
+
+            else if(name=="-rn_type") {
+                std::cout << "Changing rn_type to " << value_str << std::endl;
+                stonne_cfg.m_ASNetworkCfg.reduce_network_type=get_type_reduce_network_type(value_str);
+            }
+
+            //Running configuration parameters (layer and tile)
+   
+           //Layer parameters
+           else if(name=="-layer_name") {
+               std::cout << "Changing layer_name to " << value_str << std::endl;
+               layer_name=value_str; 
+           }
+        
+           else if(name=="-R") {
+                std::cout << "Changing R to " << value << std::endl;
+                R=value;
+           }
+
+           else if(name=="-S") {
+                std::cout << "Changing S to " << value << std::endl;
+                S=value;
+           }
+
+           else if(name=="-C") {
+                std::cout << "Changing C to " << value << std::endl;
+                C=value;
+           } 
+        
+           else if(name=="-K") {
+                std::cout << "Changing K to " << value << std::endl;
+                K=value;
+           }
+  
+           else if(name=="-G") {
+               std::cout << "Changing G to " << value << std::endl;
+               G=value;
+           }
+  
+           else if(name=="-N") {
+                std::cout << "Changing N to " << value << std::endl;
+                N=value;
+           }
+
+           else if(name=="-X") {
+                std::cout << "Changing X to " << value << std::endl;
+                X=value;
+           }
+
+           else if(name=="-Y") {
+                std::cout << "Changing Y to " << value << std::endl;
+                Y=value;
+           }
+
+           else if(name=="-strides") {
+               std::cout << "Changing strides to " << value << std::endl;
+               strides=value;
+           }
+
+           //Tile parameters
+           else if(name=="-T_R") {
+                std::cout << "Changing T_R to " << value << std::endl;
+                T_R=value;
+           } 
+
+           else if(name=="-T_S") {
+                std::cout << "Changing T_S to " << value << std::endl;
+                T_S=value;
+           }
+
+           else if(name=="-T_C") {
+                std::cout << "Changing T_C to " << value << std::endl;
+                T_C=value;
+           }
+
+           else if(name=="-T_K") {
+                std::cout << "Changing T_K to " << value << std::endl;
+                T_K=value;
+           }
+
+           else if(name=="-T_G") {
+               std::cout << "Changing T_G to " << value << std::endl;
+               T_G=value;
+           }
+
+           else if(name=="-T_N") {
+                std::cout << "Changing T_N to " << value << std::endl;
+                T_N=value;
+           }
+
+           else if(name=="-T_X_") {
+                std::cout << "Changing T_X_ to " << value << std::endl;
+                T_X_=value;
+           }
+
+           else if(name=="-T_Y_") {
+                std::cout << "Changing T_Y_ to " << value << std::endl;
+                T_Y_=value;
+           }
+
+            else if(name=="-generate_tile") {
+                std::cout << "Changing generate_tile to " << value_str << std::endl;
+                tileGeneratorTarget = parseTileGeneratorTarget(value_str);
+            }
+
+            else if(name=="-generator") {
+                std::cout << "Changing generator to " << value_str << std::endl;
+                tileGenerator = parseTileGenerator(value_str);
+            }
+
+
+
+           //Parameter is not recognized
+           else {
+                std::cout << "Error: parameter " << name << " does not exist" << std::endl;
+                exit(1);
+            }
+
+ 
+    
+           
+
+        }
+        else {
+
+            std::cout << "Error: parameter " << arg << " does not exist" << std::endl;
+            exit(1);
+
+        }
+    }
+}
 
