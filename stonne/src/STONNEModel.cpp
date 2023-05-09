@@ -170,6 +170,11 @@ void Stonne::loadCONVLayer(std::string layer_name, unsigned int R, unsigned int 
     std::cout << "Loading a convolutional layer into STONNE" << std::endl;
 }
 
+void Stonne::loadPoolLayer(std::string layer_name, unsigned int R, unsigned int S, unsigned int C, unsigned int K, unsigned int G, unsigned int N, unsigned int X, unsigned int Y, unsigned int strides, address_t input_address, address_t filter_address, address_t output_address) {
+    loadDNNLayer(CONV, layer_name, R, S, C, K, G, N, X, Y, strides, input_address, filter_address, output_address, CNN_DATAFLOW);
+    std::cout << "Loading a convolutional layer into STONNE" << std::endl;
+}
+
 void Stonne::loadFCLayer(std::string layer_name, unsigned int N, unsigned int S, unsigned int K, address_t input_address, address_t filter_address, address_t output_address)  {
      //loadDNNLayer(FC, layer_name, 1, S, 1, K, 1, N, 1, S, 1, input_address, filter_address, output_address, CNN_DATAFLOW);
     loadDNNLayer(FC, layer_name, 1, S, 1, K, 1, 1, N, S, 1, input_address, filter_address, output_address, CNN_DATAFLOW);
