@@ -1,3 +1,5 @@
+import math
+import copy
 def valid_tiling(tiling_factor, FC_flag):
     valid = True
     M3 = tiling_factor["M3"]
